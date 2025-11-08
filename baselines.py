@@ -134,6 +134,7 @@ def min_variance_portfolio(df: pd.DataFrame,
                 price = prices[ticker][i]
                 if price > 0:
                     shares_held[ticker] = investment_per_stock / price
+                    current_balance -= investment_per_stock
                 else:
                     shares_held[ticker] = 0
             
