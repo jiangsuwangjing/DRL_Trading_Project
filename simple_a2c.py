@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from data_loader import StockDataLoader
 from train_rl_models import train_a2c
+from stable_baselines3 import A2C
 from trading_env import StockTradingEnv
 from evaluation import evaluate_model, plot_portfolio_comparison
 from baselines import djia_buy_and_hold, min_variance_portfolio
@@ -144,6 +145,64 @@ def train_and_evaluate_a2c():
     
     return a2c_model, a2c_metrics
 
-if __name__ == "__main__":
-    train_and_evaluate_a2c()
 
+def evaluate_saved_model_on_range(model_path: str, start: str, end: str, tickers=None, save_plot: bool = True):
+    """Load a saved SB3 model and evaluate it on a custom date range.
+
+    This is a simplified, self-contained evaluator intended to be called
+    from the command-line or other scripts. It expects a processed data
+    file at data/stock_data_processed.csv (the project saves this during data preparation).
+    """
+    data_file = os.path.join('data', 'stock_data_processed.csv')
+    loader = StockDataLoader(tickers=tickers)
+
+    if os.path.exists(data_file):
+        loader.load_from_file(data_file)
+        loader.calculate_technical_indicators()
+    else:
+        raise FileNotFoundError(f"Processed data file not found at {data_file}. Run the data preparation step first.")
+
+    processed = loader.processed_data
+    # slice by provided dates
+    processed.index = pd.to_datetime(processed.index)
+    subset = processed[start:end]
+    if subset.empty:
+        raise ValueError(f"No data found between {start} and {end} in processed data.")
+
+    # create env and load model
+    env = StockTradingEnv(subset, tickers=tickers)
+
+    print(f"Loading model from {model_path} ...")
+    model = A2C.load(model_path)
+
+    obs, _ = env.reset()
+    done = False
+    steps = 0
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, truncated, info = env.step(action)
+        steps += 1
+
+    history = env.get_portfolio_history()
+    metrics = evaluate_model(history)
+
+    print('\nEvaluation results:')
+    for k, v in metrics.items():
+        print(f"  {k:20s}: {v:.6f}")
+
+    # save outputs
+    basename = os.path.splitext(os.path.basename(model_path))[0]
+    results_file = os.path.join(RESULTS_DIR, f"eval_{basename}_{start}_{end}.csv")
+    pd.DataFrame(metrics, index=[0]).T.to_csv(results_file)
+    print(f"Saved metrics to {results_file}")
+
+    if save_plot:
+        plot_file = os.path.join(RESULTS_DIR, f"eval_{basename}_{start}_{end}.png")
+        plot_portfolio_comparison({basename: history}, save_path=plot_file)
+        print(f"Saved plot to {plot_file}")
+
+    return metrics, history
+
+if __name__ == "__main__":
+    # evaluate_saved_model_on_range("models/a2c_simple_final.zip", "2020-01-01", "2022-01-01",save_plot=True)
+    train_and_evaluate_a2c()
