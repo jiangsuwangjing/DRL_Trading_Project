@@ -7,7 +7,7 @@ import numpy as np
 import yfinance as yf
 import pandas_ta as ta
 from typing import List, Tuple, Dict
-from config import DOW30_TICKERS, TRAIN_START, TRAIN_END, VAL_START, VAL_END, TEST_START, TEST_END, DATA_DIR
+from config import DOW30_TICKERS, TRAIN_START, TRAIN_END, VAL_START, VAL_END, TEST_START, TEST_END, DATA_DIR, MAX_MFI, MAX_PE, MAX_OBV
 import os
 
 class StockDataLoader:
@@ -110,6 +110,78 @@ class StockDataLoader:
                 new_cols[f"{ticker}_ADX"] = adx['ADX_14'].values
             else:
                 new_cols[f"{ticker}_ADX"] = np.zeros(len(df))
+            # MFI (Money Flow Index) - volume-weighted momentum indicator (0-100)
+            try:
+                # pandas_ta.mfi expects high, low, close, volume
+                mfi = ta.mfi(df[high_col], df[low_col], df[close_col], df[f"{ticker}_Volume"], length=14)
+            except Exception:
+                mfi = None
+
+            mfi_arr = mfi.values if mfi is not None else np.full(len(df), 50.0)
+            new_cols[f"{ticker}_MFI"] = mfi_arr
+            # scaled MFI (0-1)
+            try:
+                new_cols[f"{ticker}_MFI_SCALED"] = (mfi_arr / MAX_MFI).astype(float)
+            except Exception:
+                new_cols[f"{ticker}_MFI_SCALED"] = mfi_arr.astype(float) / MAX_MFI
+
+            # OBV (On-Balance Volume) - momentum indicator using volume flow
+            try:
+                # pandas_ta.obv typically expects close, volume
+                obv = ta.obv(df[close_col], df[f"{ticker}_Volume"])
+            except Exception:
+                obv = None
+
+            obv_arr = obv.values if obv is not None else np.zeros(len(df))
+            new_cols[f"{ticker}_OBV"] = obv_arr
+            # scaled OBV per-ticker to [-1,1] by dividing by max absolute
+            try:
+                abs_max = np.nanmax(np.abs(obv_arr)) if obv_arr is not None else 0.0
+                if not np.isfinite(abs_max) or abs_max == 0:
+                    scaled_obv = np.zeros(len(df))
+                else:
+                    scaled_obv = obv_arr / float(abs_max)
+            except Exception:
+                scaled_obv = np.zeros(len(df))
+            new_cols[f"{ticker}_OBV_SCALED"] = scaled_obv
+
+            # P/E ratio (trailing P/E) - fundamental data is mostly static across our time series
+            try:
+                info = yf.Ticker(ticker).info
+                pe_val = info.get('trailingPE') if isinstance(info, dict) else None
+            except Exception:
+                pe_val = None
+
+            # sensible default if PE not available
+            default_pe = 15.0
+            try:
+                if pe_val is None or (isinstance(pe_val, float) and np.isnan(pe_val)):
+                    pe_val = default_pe
+                # create a column with the constant PE value across dates
+                pe_arr = np.full(len(df), float(pe_val))
+            except Exception:
+                pe_arr = np.full(len(df), default_pe)
+
+            new_cols[f"{ticker}_PE"] = pe_arr
+            # scaled PE
+            new_cols[f"{ticker}_PE_SCALED"] = (pe_arr / MAX_PE).astype(float)
+            # P/E ratio (trailing P/E) - fundamental data is mostly static across our time series
+            # We fetch it via yfinance as a fallback; if unavailable we fill with a sensible default
+            try:
+                info = yf.Ticker(ticker).info
+                pe_val = info.get('trailingPE') if isinstance(info, dict) else None
+            except Exception:
+                pe_val = None
+
+            # sensible default if PE not available
+            default_pe = 15.0
+            try:
+                if pe_val is None or (isinstance(pe_val, float) and np.isnan(pe_val)):
+                    pe_val = default_pe
+                # create a column with the constant PE value across dates
+                new_cols[f"{ticker}_PE"] = np.full(len(df), float(pe_val))
+            except Exception:
+                new_cols[f"{ticker}_PE"] = np.full(len(df), default_pe)
         
         # Add all new columns at once
         indicator_df = pd.DataFrame(new_cols, index=df.index)
