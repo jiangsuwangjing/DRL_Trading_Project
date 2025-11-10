@@ -123,7 +123,6 @@ def train_and_evaluate_a2c():
     print(f"Plot saved to {plot_file}")
     
     # Save results to CSV
-    import pandas as pd
     results_df = pd.DataFrame({
         'A2C': a2c_metrics,
         'Buy-and-Hold': buyhold_metrics,
@@ -183,26 +182,68 @@ def evaluate_saved_model_on_range(model_path: str, start: str, end: str, tickers
         obs, reward, done, truncated, info = env.step(action)
         steps += 1
 
-    history = env.get_portfolio_history()
-    metrics = evaluate_model(history)
+    a2c_history = env.get_portfolio_history()
+    a2c_metrics = evaluate_model(a2c_history)
 
-    print('\nEvaluation results:')
-    for k, v in metrics.items():
-        print(f"  {k:20s}: {v:.6f}")
-
-    # save outputs
+    # Run baselines
+    print("  Running Buy-and-Hold baseline...")
+    buyhold_history = djia_buy_and_hold(subset, DOW30_TICKERS)
+    buyhold_metrics = evaluate_model(buyhold_history)
+    
+    print("  Running Min-Variance Portfolio baseline...")
+    minvar_history = min_variance_portfolio(subset, DOW30_TICKERS)
+    minvar_metrics = evaluate_model(minvar_history)
+    
+    # Print results
+    print("\n" + "="*80)
+    print("PERFORMANCE METRICS")
+    print("="*80)
+    
+    print("\nA2C Model:")
+    for metric, value in a2c_metrics.items():
+        print(f"  {metric:20s}: {value:.4f}")
+    
+    print("\nBuy-and-Hold Baseline:")
+    for metric, value in buyhold_metrics.items():
+        print(f"  {metric:20s}: {value:.4f}")
+    
+    print("\nMin-Variance Portfolio Baseline:")
+    for metric, value in minvar_metrics.items():
+        print(f"  {metric:20s}: {value:.4f}")
+    
+    # Create comparison plot
+    print("\nGenerating comparison plot...")
     basename = os.path.splitext(os.path.basename(model_path))[0]
+    plot_file = os.path.join(RESULTS_DIR, f"eval_{basename}_{start}_{end}.png")
+    plot_portfolio_comparison({
+        'A2C': a2c_history,
+        'Buy-and-Hold': buyhold_history,
+        'Min-Variance': minvar_history
+    }, save_path=plot_file)
+    print(f"Plot saved to {plot_file}")
+    
+    # Save results to CSV
+    results_df = pd.DataFrame({
+        'A2C': a2c_metrics,
+        'Buy-and-Hold': buyhold_metrics,
+        'Min-Variance': minvar_metrics
+    })
     results_file = os.path.join(RESULTS_DIR, f"eval_{basename}_{start}_{end}.csv")
-    pd.DataFrame(metrics, index=[0]).T.to_csv(results_file)
-    print(f"Saved metrics to {results_file}")
+    results_df.to_csv(results_file)
+    print(f"Results saved to {results_file}")
+    
+    print("\n" + "="*80)
+    print("Summary:")
+    print(f"  A2C Sharpe Ratio: {a2c_metrics['sharpe_ratio']:.4f}")
+    print(f"  Buy-Hold Sharpe: {buyhold_metrics['sharpe_ratio']:.4f}")
+    print(f"  Min-Var Sharpe: {minvar_metrics['sharpe_ratio']:.4f}")
+    print(f"\n  A2C Annual Return: {a2c_metrics['annual_return']:.4f}")
+    print(f"  Buy-Hold Return: {buyhold_metrics['annual_return']:.4f}")
+    print(f"  Min-Var Return: {minvar_metrics['annual_return']:.4f}")
+    print("="*80)
 
-    if save_plot:
-        plot_file = os.path.join(RESULTS_DIR, f"eval_{basename}_{start}_{end}.png")
-        plot_portfolio_comparison({basename: history}, save_path=plot_file)
-        print(f"Saved plot to {plot_file}")
-
-    return metrics, history
+    return a2c_metrics, a2c_history
 
 if __name__ == "__main__":
-    # evaluate_saved_model_on_range("models/a2c_simple_final.zip", "2020-01-01", "2022-01-01",save_plot=True)
-    train_and_evaluate_a2c()
+    evaluate_saved_model_on_range("models/a2c_simple_final.zip", "2022-01-01", "2024-01-01",save_plot=True)
+    # train_and_evaluate_a2c()
