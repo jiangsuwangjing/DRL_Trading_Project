@@ -7,7 +7,7 @@ import numpy as np
 import yfinance as yf
 import pandas_ta as ta
 from typing import List, Tuple, Dict
-from config import DOW30_TICKERS, TRAIN_START, TRAIN_END, VAL_START, VAL_END, TEST_START, TEST_END, DATA_DIR
+from config import DOW30_TICKERS, TRAIN_START, TRAIN_END, VAL_START, VAL_END, TEST_START, TEST_END, DATA_DIR, MAX_MFI, MAX_OBV
 import os
 
 class StockDataLoader:
@@ -100,16 +100,38 @@ class StockDataLoader:
             rsi = ta.rsi(df[close_col], length=14)
             new_cols[f"{ticker}_RSI"] = rsi.values if rsi is not None else np.full(len(df), 50.0)
             
-            # CCI (Commodity Channel Index)
-            cci = ta.cci(df[high_col], df[low_col], df[close_col], length=20)
-            new_cols[f"{ticker}_CCI"] = cci.values if cci is not None else np.zeros(len(df))
-            
-            # ADX (Average Directional Index)
-            adx = ta.adx(df[high_col], df[low_col], df[close_col], length=14)
-            if adx is not None and isinstance(adx, pd.DataFrame):
-                new_cols[f"{ticker}_ADX"] = adx['ADX_14'].values
-            else:
-                new_cols[f"{ticker}_ADX"] = np.zeros(len(df))
+            # MFI (Money Flow Index) - volume-weighted momentum indicator (0-100)
+            try:
+                mfi = ta.mfi(df[high_col], df[low_col], df[close_col], df[f"{ticker}_Volume"], length=14)
+            except Exception:
+                mfi = None
+
+            mfi_arr = mfi.values if mfi is not None else np.full(len(df), 50.0)
+            new_cols[f"{ticker}_MFI"] = mfi_arr
+            # scaled MFI (0-1)
+            try:
+                new_cols[f"{ticker}_MFI_SCALED"] = (mfi_arr / MAX_MFI).astype(float)
+            except Exception:
+                new_cols[f"{ticker}_MFI_SCALED"] = mfi_arr.astype(float) / MAX_MFI
+
+            # OBV (On-Balance Volume) - momentum indicator using volume flow
+            try:
+                obv = ta.obv(df[close_col], df[f"{ticker}_Volume"])
+            except Exception:
+                obv = None
+
+            obv_arr = obv.values if obv is not None else np.zeros(len(df))
+            new_cols[f"{ticker}_OBV"] = obv_arr
+            # scaled OBV per-ticker to [-1,1] by dividing by max absolute (fallback to MAX_OBV if zero)
+            try:
+                abs_max = np.nanmax(np.abs(obv_arr)) if obv_arr is not None else 0.0
+                if not np.isfinite(abs_max) or abs_max == 0:
+                    scaled_obv = obv_arr / MAX_OBV
+                else:
+                    scaled_obv = obv_arr / float(abs_max)
+            except Exception:
+                scaled_obv = obv_arr / MAX_OBV
+            new_cols[f"{ticker}_OBV_SCALED"] = scaled_obv
         
         # Add all new columns at once
         indicator_df = pd.DataFrame(new_cols, index=df.index)

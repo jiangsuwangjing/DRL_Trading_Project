@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Tuple, Dict, Optional
 from config import (
     INITIAL_BALANCE, TRANSACTION_COST_RATE, TURBULENCE_THRESHOLD,
-    MAX_STOCK_PRICE, MAX_SHARES, DOW30_TICKERS
+    MAX_STOCK_PRICE, MAX_SHARES, DOW30_TICKERS, MAX_MFI, MAX_OBV
 )
 
 class StockTradingEnv(gym.Env):
@@ -55,8 +55,9 @@ class StockTradingEnv(gym.Env):
         self.prices = {}
         self.macd = {}
         self.rsi = {}
-        self.cci = {}
-        self.adx = {}
+        # we'll use MFI and OBV instead of CCI/ADX
+        self.mfi = {}
+        self.obv = {}
         
         n = len(self.df)
         
@@ -82,17 +83,34 @@ class StockTradingEnv(gym.Env):
             else:
                 self.rsi[ticker] = np.full(n, 50.0, dtype=np.float32)
             
-            cci_col = f"{ticker}_CCI"
-            if cci_col in self.df.columns:
-                self.cci[ticker] = np.asarray(self.df[cci_col].values, dtype=np.float32).flatten()
+            # MFI - prefer scaled column if available
+            mfi_scaled_col = f"{ticker}_MFI_SCALED"
+            mfi_col = f"{ticker}_MFI"
+            if mfi_scaled_col in self.df.columns:
+                self.mfi[ticker] = np.asarray(self.df[mfi_scaled_col].values, dtype=np.float32).flatten()
+            elif mfi_col in self.df.columns:
+                try:
+                    self.mfi[ticker] = np.asarray(self.df[mfi_col].values, dtype=np.float32).flatten()
+                except Exception:
+                    self.mfi[ticker] = np.full(n, 50.0, dtype=np.float32)
             else:
-                self.cci[ticker] = np.zeros(n, dtype=np.float32)
-            
-            adx_col = f"{ticker}_ADX"
-            if adx_col in self.df.columns:
-                self.adx[ticker] = np.asarray(self.df[adx_col].values, dtype=np.float32).flatten()
+                self.mfi[ticker] = np.full(n, 50.0, dtype=np.float32)
+
+            # OBV - prefer scaled column if available
+            obv_scaled_col = f"{ticker}_OBV_SCALED"
+            obv_col = f"{ticker}_OBV"
+            if obv_scaled_col in self.df.columns:
+                try:
+                    self.obv[ticker] = np.asarray(self.df[obv_scaled_col].values, dtype=np.float32).flatten()
+                except Exception:
+                    self.obv[ticker] = np.zeros(n, dtype=np.float32)
+            elif obv_col in self.df.columns:
+                try:
+                    self.obv[ticker] = np.asarray(self.df[obv_col].values, dtype=np.float32).flatten()
+                except Exception:
+                    self.obv[ticker] = np.zeros(n, dtype=np.float32)
             else:
-                self.adx[ticker] = np.zeros(n, dtype=np.float32)
+                self.obv[ticker] = np.zeros(n, dtype=np.float32)
     
     def _calculate_turbulence(self):
         """Calculate turbulence index (simplified)"""
@@ -158,7 +176,7 @@ class StockTradingEnv(gym.Env):
         # Balance
         state[0] = safe_float(self.balance) / MAX_STOCK_PRICE
         
-        # For each stock: price, shares, MACD, RSI, CCI, ADX
+        # For each stock: price, shares, MACD, RSI, MFI, OBV
         idx = 1
         for i, ticker in enumerate(self.tickers):
             # Get values with NaN handling
@@ -166,16 +184,24 @@ class StockTradingEnv(gym.Env):
             shares_val = safe_float(self.shares_held[i], 0.0)
             macd_val = safe_float(self.macd[ticker][step], 0.0)
             rsi_val = safe_float(self.rsi[ticker][step], 50.0)
-            cci_val = safe_float(self.cci[ticker][step], 0.0)
-            adx_val = safe_float(self.adx[ticker][step], 0.0)
-            
+            mfi_val = safe_float(self.mfi[ticker][step], 50.0)
+            obv_val = safe_float(self.obv[ticker][step], 0.0)
+
             # Normalize and store (handle zero prices)
             state[idx] = price_val / MAX_STOCK_PRICE if price_val > 0 else 0.0
             state[idx+1] = shares_val / MAX_SHARES
             state[idx+2] = macd_val / 1000.0
             state[idx+3] = rsi_val / 100.0
-            state[idx+4] = cci_val / 1000.0
-            state[idx+5] = adx_val / 100.0
+            # MFI: accept scaled (0-1) or divide by MAX_MFI
+            if np.isfinite(mfi_val) and abs(mfi_val) <= 1.0001:
+                state[idx+4] = mfi_val
+            else:
+                state[idx+4] = mfi_val / MAX_MFI if np.isfinite(mfi_val) else 0.5
+            # OBV: accept scaled (-1..1) or divide by MAX_OBV
+            if np.isfinite(obv_val) and abs(obv_val) <= 1.0001:
+                state[idx+5] = obv_val
+            else:
+                state[idx+5] = obv_val / MAX_OBV if np.isfinite(obv_val) else 0.0
             idx += 6
         
         # Final check: replace any remaining NaN/inf

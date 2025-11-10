@@ -122,7 +122,6 @@ def train_and_evaluate_a2c():
     print(f"Plot saved to {plot_file}")
     
     # Save results to CSV
-    import pandas as pd
     results_df = pd.DataFrame({
         'A2C': a2c_metrics,
         'Buy-and-Hold': buyhold_metrics,

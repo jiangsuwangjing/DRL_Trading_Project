@@ -51,4 +51,4 @@ Thumbs.db
 # Logs
 *.log
 tensorboard_logs/
-
+logs/
